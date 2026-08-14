@@ -1,0 +1,4 @@
+spotipy>=2.26.0
+python-dotenv>=1.0.0
+psycopg[binary]>=3.2
+PyYAML>=6.0
