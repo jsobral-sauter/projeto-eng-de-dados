@@ -18,7 +18,7 @@ Arquitetura baseada no modelo **Medallion (Bronze → Silver → Gold)** da Data
 │                               │                                              │
 │                    ┌──────────▼──────────┐                                    │
 │                    │     INGESTÃO        │  Airflow DAG: ingestao_spotify    │
-│                    │  (Python/Spotipy)   │  Formato: JSON cru                 │
+│                    │  (Python/Spotipy)   │  Landing: data/landing/YYYY-MM-DD │
 │                    └──────────┬──────────┘                                    │
 │                               │                                              │
 │              ╔════════════════▼════════════════════╗                          │
@@ -31,7 +31,7 @@ Arquitetura baseada no modelo **Medallion (Bronze → Silver → Gold)** da Data
 │              ║  bronze_artists_raw                 ║                          │
 │              ║  bronze_albums_raw                  ║                          │
 │              ║  bronze_tracks_raw                  ║                          │
-│              ║  bronze_audio_features_raw          ║                          │
+│              ║  bronze_track_metrics_raw           ║                          │
 │              ╚════════════════╦═══════════════════╝                          │
 │                               │                                              │
 │                       ┌───────▼────────┐                                      │
@@ -56,7 +56,7 @@ Arquitetura baseada no modelo **Medallion (Bronze → Silver → Gold)** da Data
 │              ║  dim_album                          ║                          │
 │              ║  dim_track                          ║                          │
 │              ║  dim_date                           ║                          │
-│              ║  f_audio_features                   ║                          │
+│              ║  f_track_metrics                    ║                          │
 │              ╚════════════════╦═══════════════════╝                          │
 │                               │                                              │
 │              ╔════════════════▼════════════════════╗                          │
@@ -69,7 +69,7 @@ Arquitetura baseada no modelo **Medallion (Bronze → Silver → Gold)** da Data
 │              ║   • KPIs por artista               ║                          │
 │              ║   • Popularidade por período         ║                          │
 │              ║   • Distribuição de gêneros         ║                          │
-│              ║   • Métricas de audio features      ║                          │
+│              ║   • Métricas de tracks (Last.fm)     ║                          │
 │              ║   • Lançamentos por ano/mês         ║                          │
 │              ║                                    ║                          │
 │              ║  gold_artist_kpis                   ║                          │
@@ -101,7 +101,13 @@ Armazenar os dados exatamente como vieram da API do Spotify, sem nenhuma transfo
 | `bronze_artists_raw` | Dados brutos de artistas | `sp.artist()` / `sp.search()` |
 | `bronze_albums_raw` | Dados brutos de álbuns | `sp.album()` / `sp.artist_albums()` |
 | `bronze_tracks_raw` | Dados brutos de faixas | `sp.album().tracks` / `sp.track()` |
-| `bronze_audio_features_raw` | Audio features (danceability, energy, etc.) | `sp.audio_features()` |
+| `bronze_track_metrics_raw` | Métricas de tracks (playcount, listeners, tags) | Last.fm `track.getInfo` |
+| `bronze_user_top_tracks_raw` | Ranking das tracks mais ouvidas do usuário | Spotify OAuth `GET /me/top/tracks` |
+| `bronze_user_top_artists_raw` | Ranking dos artistas mais ouvidos do usuário | Spotify OAuth `GET /me/top/artists` |
+| `bronze_user_recently_played_raw` | Histórico recente de reprodução | Spotify OAuth `GET /me/player/recently-played` |
+
+> **Nota:** a API do Spotify deprecou os endpoints de audio features (403) e removeu `popularity`/`followers`.
+> As métricas passaram a ser enriquecidas via Last.fm; os dados pessoais vêm do OAuth (Authorization Code).
 
 ### Características
 - **Formato:** Parquet ou Delta Lake (particionado por `data_ingestao`)
@@ -154,27 +160,19 @@ Limpar, deduplicar, normalizar e estruturar os dados. Implementar Data Quality c
 │ release_date         │        │ duration_ms          │
 │ total_tracks         │        │ track_number         │
 │ album_type           │        │ explicit             │
-│ label                │        │ preview_url          │
-│ copyrights           │        │ popularity           │
+│ copyrights           │        │ disc_number          │
+│ external_urls        │        │ is_playable          │
 └──────────────────────┘        └──────────┬───────────┘
                                            │ 1
                                            │
                                            │ 1
                                 ┌──────────▼───────────┐
-                                │  f_audio_features    │
+                                │  f_track_metrics     │
                                 ├──────────────────────┤
                                 │ track_id     PK, FK  │
-                                │ danceability         │
-                                │ energy               │
-                                │ key                  │
-                                │ loudness             │
-                                │ mode                 │
-                                │ speechiness          │
-                                │ acousticness         │
-                                │ instrumentalness     │
-                                │ liveness             │
-                                │ valence              │
-                                │ tempo                │
+                                │ playcount            │
+                                │ listeners            │
+                                │ tags                 │
                                 └──────────────────────┘
 
                     ┌──────────────────────┐
@@ -213,7 +211,7 @@ Criar cubos analíticos, métricas de negócio e visões prontas para consumo vi
 | `gold_artist_kpis` | KPIs consolidados por artista | total_albums, total_tracks, avg_popularity, avg_duration, followers |
 | `gold_genre_distribution` | Distribuição de gêneros musicais | genre, artist_count, avg_popularity |
 | `gold_trends_timeline` | Tendências temporais | year, month, releases_count, avg_danceability, avg_energy |
-| `gold_audio_features_profile` | Perfil sonoro por artista | artist, avg_danceability, avg_energy, avg_valence, avg_tempo |
+| `gold_track_metrics_profile` | Perfil de métricas por artista | artist, sum_playcount, avg_listeners, top_tags |
 | `gold_explicit_analysis` | Análise de conteúdo explícito | artist, explicit_ratio, total_explicit |
 
 ### Exemplo de SQL GOLD — `gold_artist_kpis`
@@ -319,12 +317,12 @@ projeto-eng-de-dados/
 │   │   ├── dim_artist.py           # Transformação dim_artist
 │   │   ├── dim_album.py            # Transformação dim_album
 │   │   ├── dim_track.py            # Transformação dim_track
-│   │   └── f_audio_features.py     # Transformação fato audio features
+│   │   └── f_track_metrics.py    # Transformação fato track metrics
 │   ├── gold/
 │   │   ├── artist_kpis.sql         # Query de agregação GOLD
 │   │   ├── genre_distribution.sql
 │   │   ├── trends_timeline.sql
-│   │   └── audio_profile.sql
+│   │   └── track_metrics.sql
 │   └── quality/
 │       ├── expectations_bronze.json # Great Expectations suites
 │       └── expectations_silver.json
@@ -351,8 +349,8 @@ projeto-eng-de-dados/
 │  /artists   ──► Ingestão ──► bronze_artists_raw ──┤                 │
 │  /albums    ──► Ingestão ──► bronze_albums_raw  ──┤                 │
 │  /tracks    ──► Ingestão ──► bronze_tracks_raw  ──┤                 │
-│  /audio-    ──► Ingestão ──► bronze_audio_raw   ──┤                 │
-│   features                                         │                 │
+│  OAuth /me/top ──► Ingestão ──► user_data_raw    ──┤                │
+│   (dados pessoais)                                 │                 │
 │                                                    ▼                 │
 │                                          ┌─────────────────┐        │
 │                                          │  DQ Checks       │        │
@@ -366,7 +364,7 @@ projeto-eng-de-dados/
 │                                          │  dim_album       │        │
 │                                          │  dim_track       │        │
 │                                          │  dim_date        │        │
-│                                          │  f_audio_features│        │
+│                                          │  f_track_metrics │        │
 │                                          └────────┬────────┘        │
 │                                                   ▼                 │
 │                                          ┌─────────────────┐        │
