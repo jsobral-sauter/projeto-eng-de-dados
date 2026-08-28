@@ -3,5 +3,6 @@
 __pycache__/
 *.pyc
 .cache
+.cache_user
 data/
 dados_brutos.json

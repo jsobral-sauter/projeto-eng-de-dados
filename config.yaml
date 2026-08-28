@@ -1,9 +1,50 @@
+max_album_pages: 2
+
+# Enriquecimento externo: gêneros de artistas e métricas de tracks.
+# lastfm (requer LASTFM_API_KEY) | musicbrainz (sem chave, apenas gêneros)
+enrichment:
+  enabled: true
+  provider: lastfm
+  max_artists: 600
+  max_tracks: 4000
+  request_interval: 0.3
+  genres_per_artist: 10
+
+# Dados pessoais do dono do app (exigem OAuth Authorization Code)
+user_top_time_ranges:
+  - medium_term
+  - long_term
+user_recently_played_limit: 50
+
 artists:
-  - "Anitta"
-  - "Luísa Sonza"
-  - "Djavan"
-  - "Jorge Ben Jor"
-  - "Liniker"
+  - "U2"
+  - "Metallica"
+  - "Swedish House Mafia"
+  - "Kobosil"
+  - "Klangkuenstler"
+  - "Thin Lizzy"
+  - "David Bowie"
+  - "Nirvana"
+  - "WINSON"
+
+tracks:
+  - name: "One"
+    artist: "U2"
+  - name: "One"
+    artist: "Metallica"
+  - name: "Save the World"
+    artist: "Swedish House Mafia"
+  - name: "300G"
+  - name: "The Man Who Sold the World"
+    artist: "David Bowie"
+  - name: "The Man Who Sold the World"
+    artist: "Nirvana"
+  - name: "Toter Schmetterling"
+    artist: "Klangkuenstler"
+  - name: "Whiskey in the Jar"
+    artist: "Thin Lizzy"
+  - name: "Whiskey in the Jar"
+    artist: "Metallica"
 
 playlists:
   - id: "1tOrLjlSB49vMA9jasoat8"
