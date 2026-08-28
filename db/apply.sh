@@ -13,8 +13,8 @@ CONTAINER=spotify_postgres
 DB_USER=${POSTGRES_USER:-admin}
 DB_NAME=${POSTGRES_DB:-spotify}
 
-# DDL apenas; 03_validate.sql é DQL e roda manualmente (ver db/sql/)
-SQL_FILES="db/sql/01_schema.sql db/sql/02_indexes.sql"
+
+SQL_FILES="db/sql/01_schema.sql db/sql/02_indexes.sql db/sql/04_bronze.sql"
 
 for sql in $SQL_FILES; do
   echo "==> Aplicando $sql"
