@@ -1,17 +1,12 @@
 import logging
 import os
+from datetime import datetime
 
 import psycopg
 from dotenv import load_dotenv
 from psycopg import sql
 
 logger = logging.getLogger(__name__)
-
-AUDIO_FEATURE_KEYS = [
-    "danceability", "energy", "key", "loudness", "mode", "speechiness",
-    "acousticness", "instrumentalness", "liveness", "valence", "tempo",
-    "time_signature",
-]
 
 
 class PostgresLoader:
@@ -43,6 +38,7 @@ class PostgresLoader:
         self.conn.close()
 
     def load(self, data):
+        ingested_at = self._ingestion_time(data)
         with self.conn.transaction():
             genre_map = self._load_genres(data)
             artist_map = self._load_artists(data)
@@ -51,9 +47,22 @@ class PostgresLoader:
             self._load_album_artists(data, album_map, artist_map)
             track_map = self._load_tracks(data, album_map)
             self._load_track_artists(data, track_map, artist_map)
-            self._load_audio_features(data, track_map)
             playlist_map = self._load_playlists(data)
             self._load_playlist_tracks(data, playlist_map, track_map)
+            self._load_user_top_tracks(data, track_map, ingested_at)
+            self._load_user_top_artists(data, artist_map, ingested_at)
+            self._load_user_recently_played(data, track_map, ingested_at)
+            self._load_track_metrics(data, track_map, ingested_at)
+
+    @staticmethod
+    def _ingestion_time(data):
+        raw = data.get("_ingestion_timestamp")
+        if raw:
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                pass
+        return datetime.now()
 
     def _id_map(self, table, id_col, key_col, keys):
         """Mapeia valor único (ex: spotify_id) -> PK local para resolver FKs."""
@@ -89,20 +98,16 @@ class PostgresLoader:
             images = a.get("images") or []
             rows.append((
                 a["name"], a["id"],
-                a.get("popularity"),
-                (a.get("followers") or {}).get("total"),
                 images[0]["url"] if images else None,
             ))
         if rows:
             with self.conn.cursor() as cur:
                 cur.executemany(
                     """
-                    INSERT INTO spotify.artists (name, spotify_id, popularity, followers, image_url)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO spotify.artists (name, spotify_id, image_url)
+                    VALUES (%s, %s, %s)
                     ON CONFLICT (spotify_id) DO UPDATE SET
                         name       = EXCLUDED.name,
-                        popularity = COALESCE(EXCLUDED.popularity, spotify.artists.popularity),
-                        followers  = COALESCE(EXCLUDED.followers, spotify.artists.followers),
                         image_url  = COALESCE(EXCLUDED.image_url, spotify.artists.image_url),
                         updated_at = now()
                     """,
@@ -139,25 +144,28 @@ class PostgresLoader:
                 skipped += 1
                 continue
             copyrights = a.get("copyrights") or []
+            images = a.get("images") or []
             rows.append((
                 a["name"], a["id"],
                 a.get("album_type"),
                 release_date,
                 a.get("total_tracks"),
                 copyrights[0]["text"] if copyrights else None,
+                images[0]["url"] if images else None,
             ))
         if rows:
             with self.conn.cursor() as cur:
                 cur.executemany(
                     """
-                    INSERT INTO spotify.albums (name, spotify_id, album_type, release_date, total_tracks, copyright)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO spotify.albums (name, spotify_id, album_type, release_date, total_tracks, copyright, image_url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (spotify_id) DO UPDATE SET
                         name         = EXCLUDED.name,
                         album_type   = COALESCE(EXCLUDED.album_type, spotify.albums.album_type),
                         release_date = EXCLUDED.release_date,
                         total_tracks = COALESCE(EXCLUDED.total_tracks, spotify.albums.total_tracks),
                         copyright    = COALESCE(EXCLUDED.copyright, spotify.albums.copyright),
+                        image_url    = COALESCE(EXCLUDED.image_url, spotify.albums.image_url),
                         updated_at   = now()
                     """,
                     rows,
@@ -243,37 +251,13 @@ class PostgresLoader:
                 )
         logger.info("track_artists: %d", len(rows))
 
-    def _load_audio_features(self, data, track_map):
-        rows = []
-        for f in data["audio_features"]:
-            track_id = track_map.get(f["id"])
-            if not track_id:
-                continue
-            rows.append((track_id, *(f.get(k) for k in AUDIO_FEATURE_KEYS)))
-        if rows:
-            columns = ", ".join(AUDIO_FEATURE_KEYS)
-            placeholders = ", ".join(["%s"] * (len(AUDIO_FEATURE_KEYS) + 1))
-            updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in AUDIO_FEATURE_KEYS)
-            with self.conn.cursor() as cur:
-                cur.executemany(
-                    f"""
-                    INSERT INTO spotify.audio_features (track_id, {columns})
-                    VALUES ({placeholders})
-                    ON CONFLICT (track_id) DO UPDATE SET
-                        {updates},
-                        updated_at = now()
-                    """,
-                    rows,
-                )
-        logger.info("audio_features: %d", len(rows))
-
     def _load_playlists(self, data):
         rows = []
         for p in data["playlists"]:
             rows.append((
                 p["name"], p["id"],
                 p.get("description"),
-                (p.get("followers") or {}).get("total"),
+                (p.get("followers") or {}).get("total") or 0,
             ))
         if rows:
             with self.conn.cursor() as cur:
@@ -315,3 +299,89 @@ class PostgresLoader:
                 )
                 total += len(rows)
         logger.info("playlist_tracks: %d", total)
+
+    def _load_user_top_tracks(self, data, track_map, ingested_at):
+        rows = []
+        for item in data.get("user_top_tracks", []):
+            track = item.get("track")
+            track_id = track_map.get(track["id"]) if track else None
+            if not track_id:
+                continue
+            rows.append((ingested_at, item["time_range"], item["rank"], track_id))
+        if rows:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO spotify.user_top_tracks (snapshot_at, time_range, rank, track_id)
+                    VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
+                    """,
+                    rows,
+                )
+        logger.info("user_top_tracks: %d", len(rows))
+
+    def _load_user_top_artists(self, data, artist_map, ingested_at):
+        rows = []
+        for item in data.get("user_top_artists", []):
+            artist = item.get("artist")
+            artist_id = artist_map.get(artist["id"]) if artist else None
+            if not artist_id:
+                continue
+            rows.append((ingested_at, item["time_range"], item["rank"], artist_id))
+        if rows:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO spotify.user_top_artists (snapshot_at, time_range, rank, artist_id)
+                    VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
+                    """,
+                    rows,
+                )
+        logger.info("user_top_artists: %d", len(rows))
+
+    def _load_user_recently_played(self, data, track_map, ingested_at):
+        rows = []
+        for item in data.get("user_recently_played", []):
+            track = item.get("track")
+            track_id = track_map.get(track["id"]) if track else None
+            played_at = item.get("played_at")
+            if isinstance(played_at, str):
+                try:
+                    played_at = datetime.fromisoformat(played_at.replace("Z", "+00:00"))
+                except ValueError:
+                    played_at = None
+            if not track_id or not played_at:
+                continue
+            rows.append((played_at, track_id))
+        if rows:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO spotify.user_recently_played (played_at, track_id)
+                    VALUES (%s, %s) ON CONFLICT DO NOTHING
+                    """,
+                    rows,
+                )
+        logger.info("user_recently_played: %d", len(rows))
+
+    def _load_track_metrics(self, data, track_map, ingested_at):
+        rows = []
+        for m in data.get("track_metrics", []):
+            track_id = track_map.get(m["track_spotify_id"])
+            if not track_id:
+                continue
+            rows.append((track_id, m.get("playcount"), m.get("listeners"), m.get("tags") or []))
+        if rows:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO spotify.track_metrics (track_id, playcount, listeners, tags)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (track_id) DO UPDATE SET
+                        playcount  = EXCLUDED.playcount,
+                        listeners  = EXCLUDED.listeners,
+                        tags       = EXCLUDED.tags,
+                        updated_at = now()
+                    """,
+                    rows,
+                )
+        logger.info("track_metrics: %d", len(rows))
