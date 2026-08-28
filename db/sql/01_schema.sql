@@ -1,16 +1,5 @@
--- =============================================================
--- 01_schema.sql
--- Camada de catálogo (modelo DER relacional) — schema spotify
--- Re-aplicável: DROP SCHEMA ... CASCADE recomeça do zero
--- Ordem de criação respeita as dependências de FK
--- =============================================================
-
 DROP SCHEMA IF EXISTS spotify CASCADE;
 CREATE SCHEMA spotify;
-
--- -------------------------------------------------------------
--- Entidades
--- -------------------------------------------------------------
 
 CREATE TABLE spotify.genres (
     genre_id     BIGSERIAL    PRIMARY KEY,
@@ -23,8 +12,6 @@ CREATE TABLE spotify.artists (
     artist_id    BIGSERIAL    PRIMARY KEY,
     name         VARCHAR(255) NOT NULL,
     spotify_id   VARCHAR(50)  NOT NULL UNIQUE,
-    popularity   INTEGER      CHECK (popularity BETWEEN 0 AND 100),
-    followers    BIGINT,
     image_url    TEXT,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
@@ -44,6 +31,7 @@ CREATE TABLE spotify.albums (
     release_date VARCHAR(10)  NOT NULL,
     total_tracks INTEGER      CHECK (total_tracks > 0),
     copyright    TEXT,
+    image_url    TEXT,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -74,24 +62,6 @@ CREATE TABLE spotify.track_artists (
     PRIMARY KEY (track_id, artist_id)
 );
 
-CREATE TABLE spotify.audio_features (
-    track_id         BIGINT PRIMARY KEY REFERENCES spotify.tracks(track_id) ON DELETE CASCADE,
-    danceability     REAL,
-    energy           REAL,
-    key              INTEGER,
-    loudness         REAL,
-    mode             INTEGER,
-    speechiness      REAL,
-    acousticness     REAL,
-    instrumentalness REAL,
-    liveness         REAL,
-    valence          REAL,
-    tempo            REAL,
-    time_signature   INTEGER,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE spotify.playlists (
     playlist_id  BIGSERIAL    PRIMARY KEY,
     name         VARCHAR(255) NOT NULL,
@@ -102,10 +72,6 @@ CREATE TABLE spotify.playlists (
     updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- -------------------------------------------------------------
--- Tabelas associativas (N:N)
--- -------------------------------------------------------------
-
 CREATE TABLE spotify.playlist_tracks (
     playlist_track_id BIGSERIAL PRIMARY KEY,
     playlist_id  BIGINT NOT NULL REFERENCES spotify.playlists(playlist_id) ON DELETE CASCADE,
@@ -113,4 +79,36 @@ CREATE TABLE spotify.playlist_tracks (
     position     INTEGER,
     added_at     TIMESTAMPTZ,
     UNIQUE (playlist_id, position)
+);
+
+CREATE TABLE spotify.user_top_tracks (
+    snapshot_at  TIMESTAMPTZ NOT NULL,
+    time_range   VARCHAR(12) NOT NULL,
+    rank         INTEGER     NOT NULL CHECK (rank > 0),
+    track_id     BIGINT NOT NULL REFERENCES spotify.tracks(track_id) ON DELETE CASCADE,
+    PRIMARY KEY (snapshot_at, time_range, rank)
+);
+
+CREATE TABLE spotify.user_top_artists (
+    snapshot_at  TIMESTAMPTZ NOT NULL,
+    time_range   VARCHAR(12) NOT NULL,
+    rank         INTEGER     NOT NULL CHECK (rank > 0),
+    artist_id    BIGINT NOT NULL REFERENCES spotify.artists(artist_id) ON DELETE CASCADE,
+    PRIMARY KEY (snapshot_at, time_range, rank)
+);
+
+CREATE TABLE spotify.user_recently_played (
+    played_at    TIMESTAMPTZ NOT NULL,
+    track_id     BIGINT NOT NULL REFERENCES spotify.tracks(track_id) ON DELETE CASCADE,
+    PRIMARY KEY (played_at, track_id)
+);
+
+CREATE TABLE spotify.track_metrics (
+    track_metric_id BIGSERIAL PRIMARY KEY,
+    track_id   BIGINT NOT NULL UNIQUE REFERENCES spotify.tracks(track_id) ON DELETE CASCADE,
+    playcount  BIGINT,
+    listeners  BIGINT,
+    tags       TEXT[],
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

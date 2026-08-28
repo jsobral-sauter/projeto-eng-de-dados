@@ -25,9 +25,12 @@ O banco utiliza tabelas associativas (tabelas de junção) para resolver relacio
     *   `expllicit` *(Nota: Escrito com dois 'L's no diagrama original)*
     *   `album_id` **(FK)** -> Referencia `albums(album_id)`
 
-*   **`audio_features`** (Características técnicas e acústicas da música)
-    *   `track_id` **(PK/FK)** -> Referencia `tracks(track_id)`
-    *   `danceability`, `energy`, `key`, `loudness`, `mode`, `speechiness`, `acousticness`, `instrumentalness`, `liveness`, `valence`, `tempo`, `time_signature`
+*   **`track_metrics`** (Métricas de tracks vindas do Last.fm)
+    *   `track_metric_id` **(PK)**
+    *   `track_id` **(FK)** -> Referencia `tracks(track_id)` (1:1)
+    *   `playcount`
+    *   `listeners`
+    *   `tags`
 
 *   **`albums`** (Álbuns musicais)
     *   `album_id` **(PK)**
@@ -42,8 +45,6 @@ O banco utiliza tabelas associativas (tabelas de junção) para resolver relacio
     *   `artist_id` **(PK)**
     *   `name`
     *   `spotify_id`
-    *   `popularity`
-    *   `followers`
     *   `image_url`
 
 *   **`genres`** (Gêneros musicais)
@@ -74,6 +75,25 @@ O banco utiliza tabelas associativas (tabelas de junção) para resolver relacio
     *   `genre_id` **(PK/FK)** -> Referencia `genres`
     *   `artist_id` **(PK/FK)** -> Referencia `artists`
 
+### 3. Dados Pessoais do Usuário (OAuth)
+
+*   **`user_top_tracks`** (Ranking das tracks mais ouvidas — snapshot por execução)
+    *   `snapshot_at`, `time_range`, `rank` **(PK composto)**
+    *   `track_id` **(FK)** -> Referencia `tracks`
+
+*   **`user_top_artists`** (Ranking dos artistas mais ouvidos — snapshot por execução)
+    *   `snapshot_at`, `time_range`, `rank` **(PK composto)**
+    *   `artist_id` **(FK)** -> Referencia `artists`
+
+*   **`user_recently_played`** (Histórico recente de reprodução)
+    *   `played_at`, `track_id` **(PK composto)**
+    *   `track_id` **(FK)** -> Referencia `tracks`
+
+---
+
+> **⚠️ O diagrama `Diagram DER.png` está desatualizado** (ainda contém `audio_features` e
+> `popularity`/`followers` de artistas). Este documento reflete o modelo atual.
+
 ---
 
 ## 🔗 Relacionamentos e Cardinalidades
@@ -81,7 +101,7 @@ O banco utiliza tabelas associativas (tabelas de junção) para resolver relacio
 | Entidade A | Cardinalidade | Entidade B | Tabela de Resolução | Descrição do Relacionamento |
 | :--- | :---: | :--- | :--- | :--- |
 | `playlists` | **N:M** | `tracks` | `playlist_tracks` | Uma playlist pode ter várias músicas; uma música pode estar em várias playlists. (1:N de ambas para a tabela associativa). |
-| `tracks` | **1:1** | `audio_features` | *(Nenhuma)* | Cada música tem exatamente um registro correspondente com seus detalhes acústicos. O `track_id` em `audio_features` é tanto PK quanto FK. |
+| `tracks` | **1:1** | `track_metrics` | *(Nenhuma)* | Cada música tem um registro opcional com métricas do Last.fm (playcount/listeners/tags). `track_id` é UNIQUE em `track_metrics`. |
 | `albums` | **1:N** | `tracks` | *(Nenhuma)* | Um álbum contém várias músicas. A tabela `tracks` armazena o `album_id` (FK). |
 | `tracks` | **N:M** | `artists` | `track_artists` | Uma música pode ter vários artistas (ex: feats), e um artista tem várias músicas. |
 | `albums` | **N:M** | `artists` | `album_artists` | Um álbum pode ser colaborativo (vários artistas), e um artista lança vários álbuns. |
