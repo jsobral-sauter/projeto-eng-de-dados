@@ -7,13 +7,15 @@ import spotipy
 from dotenv import load_dotenv
 from spotipy.oauth2 import SpotifyClientCredentials
 
+from ingestion.oauth import build_user_client
+
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 5
 
 
 class SpotifyClient:
-    """Wrapper do Spotipy: autenticação (client credentials) + retry em 429/5xx."""
+    """Wrapper do Spotipy: autenticação (client credentials + OAuth opcional) e retry."""
 
     def __init__(self):
         load_dotenv()
@@ -22,7 +24,26 @@ class SpotifyClient:
             client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
         )
         self._sp = spotipy.Spotify(client_credentials_manager=credentials, requests_timeout=30)
+        self._sp_user = None
+        self.user_id = None
+        self._init_user_client()
         logger.info("Cliente Spotify autenticado (client credentials)")
+
+    def _init_user_client(self):
+        self._sp_user = build_user_client()
+        if self._sp_user is None:
+            return
+        try:
+            me = self._safe_call(self._sp_user.me)
+            self.user_id = me.get("id")
+            logger.info("Cliente de usuário autenticado: %s", me.get("display_name"))
+        except Exception as exc:
+            logger.warning("Falha ao obter perfil do usuário (%s) — dados pessoais indisponíveis", type(exc).__name__)
+            self._sp_user = None
+            self.user_id = None
+
+    def user_available(self):
+        return self._sp_user is not None
 
     def _safe_call(self, fn, *args, **kwargs):
         """Executa a chamada com retry em erros retryable.
@@ -67,6 +88,14 @@ class SpotifyClient:
         items = results.get("artists", {}).get("items") or []
         return items[0] if items else None
 
+    def search_track(self, name, artist=None):
+        query = f"track:{name}"
+        if artist:
+            query += f" artist:{artist}"
+        results = self._safe_call(self._sp.search, q=query, type="track", limit=1)
+        items = results.get("tracks", {}).get("items") or []
+        return items[0] if items else None
+
     def artist(self, artist_id):
         return self._safe_call(self._sp.artist, artist_id)
 
@@ -79,21 +108,48 @@ class SpotifyClient:
     def album(self, album_id):
         return self._safe_call(self._sp.album, album_id)
 
-    def next_page(self, results):
-        return self._safe_call(self._sp.next, results)
-
-    def audio_features(self, track_ids):
-        return self._safe_call(self._sp.audio_features, track_ids)
+    def next_page(self, results, user=False):
+        sp = self._sp_user if user else self._sp
+        return self._safe_call(sp.next, results)
 
     def playlist(self, playlist_id):
         return self._safe_call(self._sp.playlist, playlist_id)
 
-    def playlist_items(self, playlist_id):
+    def playlist_items(self, playlist_id, user=False):
+        sp = self._sp_user if user else self._sp
         items = []
-        results = self._safe_call(self._sp.playlist_items, playlist_id, limit=10, offset=0)
+        results = self._safe_call(sp.playlist_items, playlist_id, limit=50, offset=0)
         while True:
             items.extend(results["items"])
             if not results.get("next"):
                 break
-            results = self.next_page(results)
+            results = self._safe_call(sp.next, results)
         return items
+
+    # ---------- dados do usuário (exigem OAuth Authorization Code) ----------
+
+    def current_user_playlists(self):
+        items = []
+        results = self._safe_call(self._sp_user.current_user_playlists, limit=50, offset=0)
+        while True:
+            items.extend(results["items"])
+            if not results.get("next"):
+                break
+            results = self.next_page(results, user=True)
+        return items
+
+    def owned_or_collaborated_playlists(self):
+        """Playlists cujo conteúdo a API devolve: dono do app ou colaborador."""
+        return [
+            p for p in self.current_user_playlists()
+            if (p.get("owner") or {}).get("id") == self.user_id or p.get("collaborative")
+        ]
+
+    def current_user_top_tracks(self, time_range="medium_term", limit=50):
+        return self._safe_call(self._sp_user.current_user_top_tracks, limit=limit, time_range=time_range)
+
+    def current_user_top_artists(self, time_range="medium_term", limit=50):
+        return self._safe_call(self._sp_user.current_user_top_artists, limit=limit, time_range=time_range)
+
+    def current_user_recently_played(self, after=None, limit=50):
+        return self._safe_call(self._sp_user.current_user_recently_played, limit=limit, after=after)
