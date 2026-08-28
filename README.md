@@ -177,7 +177,6 @@ A API do Spotify passou por mudanças (Nov/2024 e Fev/2026) que afetam apps em d
 
 ## Próximos passos
 
-- ISRC/UPC (`external_ids`) — reativados pela API em Mar/2026, colunas ainda não adicionadas
 - Camadas silver/gold em SQL
 - Orquestração com Apache Airflow
 - Migração para GCP (GCS + BigQuery + Cloud Run)
